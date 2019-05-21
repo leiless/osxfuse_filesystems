@@ -1,30 +1,42 @@
 /*
  * Created 190519 lynnl
  *
- * Hello FUSE filesystem implementation using low-level FUSE API
+ * Clock FUSE filesystem implementation using low-level FUSE API
+ *
+ * Original authros:
+ *  Miklos Szeredi <miklos@szeredi.hu>
+ *  Benjamin Fleischer
  *
  * see:
- *  osxfuse/filesystems/filesystems-c/hello/hello_ll.c
- *  libfuse/example/hello_ll.c
+ *  osxfuse/filesystems/filesystems-c/clock/clock_ll.c
  */
 
-#define FUSE_USE_VERSION    26
-#define _FILE_OFFSET_BITS   64
+#define FUSE_USE_VERSION            26
+#define _FILE_OFFSET_BITS           64
+
+#ifndef _DARWIN_USE_64_BIT_INODE
+#define _DARWIN_USE_64_BIT_INODE    1
+#endif
 
 #include <stdio.h>
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>     /* usleep(3) */
+
 #include <fuse_lowlevel.h>
 
 #include "utils.h"
 
-static const char *file_path = "/hello.txt";
-static const char file_content[] = "Hello world!\n";
-static const size_t file_size = STRLEN(file_content);
+#define DATA_BUFSZ  64
 
-static int hello_stat(fuse_ino_t ino, struct stat *stbuf)
+static const char *file_name = "clock.txt";
+static char file_data[DATA_BUFSZ];
+
+static int clock_stat(fuse_ino_t ino, struct stat *stbuf)
 {
     assert_nonnull(stbuf);
 
@@ -38,7 +50,7 @@ static int hello_stat(fuse_ino_t ino, struct stat *stbuf)
     case 2:
         stbuf->st_mode = S_IFREG | 0444;    /* r--r--r-- */
         stbuf->st_nlink = 1;
-        stbuf->st_size = file_size;
+        stbuf->st_size = strlen(file_data);
         break;
 
     default:
@@ -48,7 +60,7 @@ static int hello_stat(fuse_ino_t ino, struct stat *stbuf)
     return 0;
 }
 
-static void hello_ll_lookup(
+static void clock_ll_lookup(
         fuse_req_t req,
         fuse_ino_t parent,
         const char *name)
@@ -61,23 +73,23 @@ static void hello_ll_lookup(
 
     SYSLOG_DBG("lookup()  parent: %#lx name: %s", parent, name);
 
-    if (parent != 1 || strcmp(name, file_path + 1) != 0) {
+    if (parent != 1 || strcmp(name, file_name) != 0) {
         e = fuse_reply_err(req, ENOENT);
         assert(e == 0);
         return;
     }
 
     (void) memset(&param, 0, sizeof(param));
-    param.ino = 2;              /* see: hello_stat() */
+    param.ino = 2;              /* see: clock_stat() */
     param.attr_timeout = 1.0;   /* in seconds */
     param.entry_timeout = 1.0;  /* in seconds */
-    (void) hello_stat(param.ino, &param.attr);
+    (void) clock_stat(param.ino, &param.attr);
 
     e = fuse_reply_entry(req, &param);
     assert(e == 0);
 }
 
-static void hello_ll_getattr(
+static void clock_ll_getattr(
         fuse_req_t req,
         fuse_ino_t ino,
         struct fuse_file_info *fi)
@@ -92,7 +104,7 @@ static void hello_ll_getattr(
 
     (void) memset(&stbuf, 0, sizeof(stbuf));
 
-    if (hello_stat(ino, &stbuf) == 0) {
+    if (clock_stat(ino, &stbuf) == 0) {
         e = fuse_reply_attr(req, &stbuf, 1.0);
         assert(e == 0);
     } else {
@@ -158,7 +170,7 @@ static int reply_buf_limited(
     return fuse_reply_buf(req, NULL, 0);
 }
 
-static void hello_ll_readdir(
+static void clock_ll_readdir(
         fuse_req_t req,
         fuse_ino_t ino,
         size_t size,
@@ -185,7 +197,7 @@ static void hello_ll_readdir(
 
     dirbuf_add(req, &b, ".", 1);                /* Root directory */
     dirbuf_add(req, &b, "..", 1);               /* Parent of root is itself */
-    dirbuf_add(req, &b, file_path + 1, 2);      /* The only regular file */
+    dirbuf_add(req, &b, file_name, 2);      /* The only regular file */
 
     e = reply_buf_limited(req, b.p, b.size, off, size);
     assert(e == 0);
@@ -193,7 +205,7 @@ static void hello_ll_readdir(
     free(b.p);
 }
 
-static void hello_ll_open(
+static void clock_ll_open(
         fuse_req_t req,
         fuse_ino_t ino,
         struct fuse_file_info *fi)
@@ -217,7 +229,7 @@ static void hello_ll_open(
     }
 }
 
-static void hello_ll_read(
+static void clock_ll_read(
         fuse_req_t req,
         fuse_ino_t ino,
         size_t size,
@@ -234,16 +246,38 @@ static void hello_ll_read(
                         ino, size, off, fi->flags);
 
     assert(ino == 2);
-    e = reply_buf_limited(req, file_content, file_size, off, size);
+    e = reply_buf_limited(req, file_data, strlen(file_data), off, size);
     assert(e == 0);
 }
 
-static const struct fuse_lowlevel_ops hello_ll_ops = {
-    .lookup = hello_ll_lookup,
-    .getattr = hello_ll_getattr,
-    .readdir = hello_ll_readdir,
-    .open = hello_ll_open,
-    .read = hello_ll_read,
+static void *clock_update(void *arg)
+{
+    struct fuse_session *se;
+    struct fuse_chan *ch;
+    int e;
+
+    assert_nonnull(arg);
+
+    se = (struct fuse_session *) arg;
+    ch = fuse_session_next_chan(se, NULL);
+
+    while (!fuse_session_exited(se)) {
+        (void) snprintf(file_data, sizeof(file_data), "%ld\n", time(NULL));
+
+        e = fuse_lowlevel_notify_inval_inode(ch, 2, 0, 0);
+        assert(e == 0);
+        (void) usleep(250000);     /* 250ms */
+    }
+
+    return NULL;
+}
+
+static const struct fuse_lowlevel_ops clock_ll_ops = {
+    .lookup = clock_ll_lookup,
+    .getattr = clock_ll_getattr,
+    .readdir = clock_ll_readdir,
+    .open = clock_ll_open,
+    .read = clock_ll_read,
 };
 
 int main(int argc, char *argv[])
@@ -252,6 +286,7 @@ int main(int argc, char *argv[])
     struct fuse_chan *ch;
     struct fuse_session *se;
     char *mountpoint = NULL;
+    pthread_t clock_thread;
     int e;
 
     /* Setup syslog(3) */
@@ -278,7 +313,7 @@ int main(int argc, char *argv[])
         goto out_chan;
     }
 
-    se = fuse_lowlevel_new(&args, &hello_ll_ops, sizeof(hello_ll_ops), NULL /* user data */);
+    se = fuse_lowlevel_new(&args, &clock_ll_ops, sizeof(clock_ll_ops), NULL /* user data */);
     if (se == NULL) {
         LOG_ERROR("fuse_lowlevel_new() fail");
         e = 4;
@@ -289,17 +324,26 @@ int main(int argc, char *argv[])
         fuse_session_add_chan(se, ch);
 
         LOG("Type `umount %s' in shell to stop this fs", mountpoint);
-        if (fuse_session_loop(se) == -1) {
+
+        if (pthread_create(&clock_thread, NULL, &clock_update, se) != 0) {
+            LOG_ERROR("pthread_create(3) fail  errno: %d", errno);
             e = 5;
+            goto out_pthread;
+        }
+
+        if (fuse_session_loop(se) == -1) {
+            e = 6;
             LOG_ERROR("fuse_session_loop() fail");
         } else {
             LOG("session loop end  cleaning up...");
         }
 
+        /* TODO: call pthread_join() */
+out_pthread:
         fuse_remove_signal_handlers(se);
         fuse_session_remove_chan(ch);
     } else {
-        e = 6;
+        e = 7;
         LOG_ERROR("fuse_set_signal_handlers() fail");
     }
 
