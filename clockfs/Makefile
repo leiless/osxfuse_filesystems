@@ -1,5 +1,5 @@
 #
-# Makefile for hello fs
+# Makefile for clockfs
 #
 
 CC ?= gcc
@@ -25,33 +25,22 @@ CFLAGS += -I$(INCLUDE_DIR) -L$(LIBRARY_DIR)
 
 LIBS += -losxfuse
 
-EXEC := hello_fs hello_fs-debug hello_fs_ll hello_fs_ll-debug
+EXEC := clockfs clockfs_ll
 
-all: debug
+all: clockfs clockfs_ll
 
-release: hello_fs hello_fs_ll
-debug: hello_fs-debug hello_fs_ll-debug
-
-hello_fs: CFLAGS += -Os
-hello_fs: hello_fs.c
+clockfs: CPPFLAGS += -g -DDEBUG
+clockfs: CFLAGS += -O0
+clockfs: clockfs.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBS) $< -o $@
 
-hello_fs_ll: CFLAGS += -Os
-hello_fs_ll: hello_fs_ll.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBS) $< -o $@
-
-hello_fs-debug: CPPFLAGS += -g -DDEBUG
-hello_fs-debug: CFLAGS += -O0
-hello_fs-debug: hello_fs.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBS) $< -o $@
-
-hello_fs_ll-debug: CPPFLAGS += -g -DDEBUG
-hello_fs_ll-debug: CFLAGS += -O0
-hello_fs_ll-debug: hello_fs_ll.c
+clockfs_ll: CPPFLAGS += -g -DDEBUG
+clockfs_ll: CFLAGS += -O0
+clockfs_ll: clockfs_ll.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBS) $< -o $@
 
 clean:
 	rm -rf *.o *.dSYM $(EXEC)
 
-.PHONY: all clean hello_fs hello_fs-debug
+.PHONY: all clean clockfs clockfs_ll
 
