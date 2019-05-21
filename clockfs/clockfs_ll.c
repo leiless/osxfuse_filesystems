@@ -264,8 +264,20 @@ static void *clock_update(void *arg)
     while (!fuse_session_exited(se)) {
         (void) snprintf(file_data, sizeof(file_data), "%ld\n", time(NULL));
 
+        /*
+         * fuse_lowlevel_notify_inval_inode() may return errno 57
+         * it means the device not yet ready
+         * see: fuse_session_loop(3)
+         */
         e = fuse_lowlevel_notify_inval_inode(ch, 2, 0, 0);
-        assert(e == 0);
+        if (e != 0 && e != -ENOENT) {
+            /*
+             * inode 2(the only regular file) may not yet present in this fs
+             * in such case fuse_lowlevel_notify_inval_inode() will return -ENOENT
+             */
+            LOG_ERROR("fuse_lowlevel_notify_inval_inode() fail  errno: %d", -e);
+        }
+
         (void) usleep(250000);     /* 250ms */
     }
 
