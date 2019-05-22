@@ -250,6 +250,8 @@ static void clock_ll_read(
     assert(e == 0);
 }
 
+#define MSEC_PER_USEC   1000
+
 static void *clock_update(void *arg)
 {
     struct fuse_session *se;
@@ -265,9 +267,10 @@ static void *clock_update(void *arg)
         (void) snprintf(file_data, sizeof(file_data), "%ld\n", time(NULL));
 
         /*
-         * fuse_lowlevel_notify_inval_inode() may return errno 57
-         * it means the device not yet ready
-         * see: fuse_session_loop(3)
+         * fuse_lowlevel_notify_inval_inode() may return errno ENOTCONN (57)
+         * it means fs's backing `struct fuse_ll' not yet initialized
+         * case happens when function called sooner than fuse_session_loop()
+         * see: osxfuse/fuse/lib/fuse_lowlevel.c#fuse_lowlevel_notify_inval_inode
          */
         e = fuse_lowlevel_notify_inval_inode(ch, 2, 0, 0);
         if (e != 0 && e != -ENOENT) {
@@ -278,10 +281,10 @@ static void *clock_update(void *arg)
             LOG_ERROR("fuse_lowlevel_notify_inval_inode() fail  errno: %d", -e);
         }
 
-        (void) usleep(250000);     /* 250ms */
+        (void) usleep(250 * MSEC_PER_USEC);
     }
 
-    return NULL;
+    pthread_exit(NULL);
 }
 
 static const struct fuse_lowlevel_ops clock_ll_ops = {
@@ -350,7 +353,15 @@ int main(int argc, char *argv[])
             LOG("session loop end  cleaning up...");
         }
 
-        /* TODO: call pthread_join() */
+        /* NOTE: is it's ok to call fuse_session_exit()? */
+        fuse_session_exit(se);
+
+        e = pthread_join(clock_thread, NULL);
+        if (e != 0) {
+            LOG_ERROR("pthread_join(3) fail  errno: %d", e);
+            e = 8;
+        }
+
 out_pthread:
         fuse_remove_signal_handlers(se);
         fuse_session_remove_chan(ch);
