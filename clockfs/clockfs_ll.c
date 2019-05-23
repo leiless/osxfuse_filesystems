@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/time.h>
 #include <unistd.h>     /* usleep(3) */
 
 #include <fuse_lowlevel.h>
@@ -250,6 +251,27 @@ static void clock_ll_read(
     assert(e == 0);
 }
 
+static void fmt_datetime(char *str, size_t n)
+{
+    struct timeval tv;
+    struct tm *t;
+
+    assert_nonnull(str);
+    assert(n > 0);
+
+    (void) gettimeofday(&tv, NULL);     /* Won't fail */
+    t = localtime(&tv.tv_sec);
+    *str = '\0';
+
+    if (t != NULL) {
+        (void)
+        snprintf(str, n, "%2d/%02d/%02d %02d:%02d:%02d.%03d%+05ld\n",
+            (1900 + t->tm_year) % 100, t->tm_mon + 1, t->tm_mday,
+            t->tm_hour, t->tm_min, t->tm_sec,
+            tv.tv_usec / 1000, t->tm_gmtoff * 100 / 3600);
+    }
+}
+
 #define MSEC_PER_USEC   1000
 
 static void *clock_update(void *arg)
@@ -264,7 +286,7 @@ static void *clock_update(void *arg)
     ch = fuse_session_next_chan(se, NULL);
 
     while (!fuse_session_exited(se)) {
-        (void) snprintf(file_data, sizeof(file_data), "%ld\n", time(NULL));
+        fmt_datetime(file_data, sizeof(file_data));
 
         /*
          * fuse_lowlevel_notify_inval_inode() may return errno ENOTCONN (57)
