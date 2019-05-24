@@ -13,7 +13,7 @@
  */
 #define STRLEN(s)           (sizeof(s) - 1)
 
-#define FSNAME              "hello_fs"
+#define FSNAME              "clockfs"
 
 #define LOG(fmt, ...)       \
     (void) printf(FSNAME ": " fmt "\n", ##__VA_ARGS__)
