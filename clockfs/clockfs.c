@@ -1,11 +1,12 @@
 /*
  * Created 190514 lynnl
  *
- * Hello FUSE filesystem implementation using high-level FUSE API
+ * Clock FUSE filesystem implementation mixed with high/low level FUSE API
  *
  * see:
  *  osxfuse/filesystems/filesystems-c/hello/hello.c
  *  libfuse/example/hello.c
+ *  osxfuse/filesystems/filesystems-c/clock/clock_ll.c
  */
 
 #define FUSE_USE_VERSION            26
@@ -16,9 +17,10 @@
 #endif
 
 #include <stdio.h>
-#include <string.h>
 #include <assert.h>
 #include <errno.h>
+#include <string.h>
+#include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
 #include <sys/time.h>
@@ -175,7 +177,7 @@ static void *clock_update(void *arg)
     se = (struct fuse_session *) arg;
     ch = fuse_session_next_chan(se, NULL);
 
-    SYSLOG("Clock update thread is up");
+    LOG("clock update thread is up");
 
     while (!fuse_session_exited(se)) {
         fmt_datetime(file_data, sizeof(file_data));
@@ -192,13 +194,13 @@ static void *clock_update(void *arg)
              * inode 2(the only regular file) may not yet present in this fs
              * in such case fuse_lowlevel_notify_inval_inode() will return -ENOENT
              */
-            SYSLOG_ERR("fuse_lowlevel_notify_inval_inode() fail  errno: %d", -e);
+            LOG_ERROR("fuse_lowlevel_notify_inval_inode() fail  errno: %d", -e);
         }
 
         (void) usleep(250 * MSEC_PER_USEC);
     }
 
-    SYSLOG("Clock update thread going to die...");
+    LOG("clock update thread going to die...");
     pthread_exit(NULL);
 }
 
@@ -217,55 +219,88 @@ static struct fuse_operations clockfs_ops = {
  */
 int main(int argc, char *argv[])
 {
-    int e;
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    char *mountpoint = NULL;
+    struct fuse_chan *ch;
     struct fuse *fuse;
-    char *mp;
-    int mt;
     struct fuse_session *se;
     pthread_t clock_thread;
+    int e;
 
     /* Setup syslog(3) */
     (void) setlogmask(LOG_UPTO(LOG_NOTICE));
 
-    /* fuse_setup(3) will do fork(2) after successfully returned */
-    fuse = fuse_setup(argc, argv, &clockfs_ops, sizeof(clockfs_ops), &mp, &mt, NULL);
-    if (fuse == NULL) {
-        LOG_ERROR("fuse_setup(3) fail");
+    e = fuse_parse_cmdline(&args, &mountpoint, NULL, NULL);
+    if (e == -1) {
+        LOG_ERROR("fuse_parse_cmdline() fail");
         e = 1;
-        goto out_setup;
+        goto out_fail;
+    } else if (mountpoint == NULL) {
+        if (argc == 1) LOG_ERROR("no mountpoint  -h for help");
+        e = 2;
+        goto out_args;
+    }
+
+    assert_nonnull(mountpoint);
+    LOG("mountpoint: %s", mountpoint);
+
+    ch = fuse_mount(mountpoint, &args);
+    if (ch == NULL) {
+        LOG_ERROR("fuse_mount() fail");
+        e = 3;
+        goto out_chan;
+    }
+
+    fuse = fuse_new(ch, &args, &clockfs_ops, sizeof(clockfs_ops), NULL);
+    if (fuse == NULL) {
+        LOG_ERROR("fuse_new() fail");
+        e = 4;
+        goto out_fuse;
     }
 
     se = fuse_get_session(fuse);
     assert_nonnull(se);
 
-    if (pthread_create(&clock_thread, NULL, &clock_update, se) != 0) {
-        SYSLOG_ERR("pthread_create(3) fail  errno: %d", errno);
-        e = 2;
-        goto out_thread;
+    if (fuse_set_signal_handlers(se) != -1) {
+        LOG("type `umount %s' in shell for unmount", mountpoint);
+
+        if (pthread_create(&clock_thread, NULL, &clock_update, se) != 0) {
+            LOG_ERROR("pthread_create(3) fail  errno: %d", errno);
+            e = 5;
+            goto out_pthread;
+        }
+
+        if (fuse_session_loop(se) == -1) {
+            e = 6;
+            LOG_ERROR("fuse_session_loop() fail");
+        } else {
+            LOG("session loop end  cleaning up...");
+        }
+
+        /* NOTE: is it's ok to call fuse_session_exit()? */
+        fuse_session_exit(se);
+
+        e = pthread_join(clock_thread, NULL);
+        if (e != 0) {
+            LOG_ERROR("pthread_join(3) fail  errno: %d", e);
+            e = 7;
+        }
+
+out_pthread:
+        fuse_remove_signal_handlers(se);
+    } else {
+        e = 8;
+        LOG_ERROR("fuse_set_signal_handlers() fail");
     }
 
-    /* TODO: call fuse_session_add_chan() */
-
-    e = (mt ? fuse_loop_mt : fuse_loop)(fuse);
-    if (e != 0) {
-        SYSLOG_ERR("fuse_loop*(3) fail");
-        e = 3;
-    }
-
-    /* NOTE: is it's ok to call fuse_session_exit(3)? */
-    fuse_session_exit(se);
-
-    e = pthread_join(clock_thread, NULL);
-    if (e != 0) {
-        SYSLOG_ERR("pthread_join(3) fail  errno: %d", e);
-        e = 4;
-    }
-
-    /* TODO: call fuse_session_remove_chan() */
-
-out_thread:
-    fuse_teardown(fuse, mp);
-out_setup:
+out_fuse:
+    fuse_unmount(mountpoint, ch);
+    if (fuse != NULL) fuse_destroy(fuse);
+out_chan:
+    free(mountpoint);
+out_args:
+    fuse_opt_free_args(&args);
+out_fail:
     return e;
 }
 
