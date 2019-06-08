@@ -25,6 +25,7 @@
 #include <stddef.h>     /* offsetof() */
 #include <stdlib.h>
 #include <unistd.h>     /* readlink(2) */
+#include <dirent.h>     /* DIR */
 #include <errno.h>
 
 #include <sys/stat.h>   /* umask(2) */
@@ -282,6 +283,180 @@ static int lb_read(
     return RET_TO_ERRNO(n);
 }
 
+/**
+ * Write data to an open file
+ *
+ * Write should return exactly the number of bytes requested
+ * except on error.     An exception to this is when the 'direct_io'
+ * mount option is specified (see read operation).
+ *
+ * Changed in version 2.2
+ */
+static int lb_write(
+        const char *path,
+        const char *buf,
+        size_t sz,
+        off_t off,
+        struct fuse_file_info *fi)
+{
+    ssize_t wr;
+
+    assert_nonnull(path);
+    assert(!!buf | !sz);    /* Fail if buf is NULL yet sz not zero */
+    assert_nonnull(fi);
+
+    wr = pwrite((int) fi->fh, buf, sz, off);
+    return RET_TO_ERRNO(wr);
+}
+
+/**
+ * Get file system statistics
+ *
+ * The 'f_frsize', 'f_favail', 'f_fsid' and 'f_flag' fields are ignored
+ *
+ * Replaced 'struct statfs' parameter with 'struct statvfs' in
+ * version 2.5
+ */
+static int lb_statfs(const char *path, struct statvfs *st)
+{
+    assert_nonnull(path);
+    assert_nonnull(st);
+
+    return RET_TO_ERRNO(statvfs(path, st));
+}
+
+/**
+ * Possibly flush cached data
+ * see: struct fuse_operations.flush
+ */
+static int lb_flush(const char *path, struct fuse_file_info *fi)
+{
+    int fd;
+
+    assert_nonnull(path);
+    assert_nonnull(fi);
+
+    fd = dup((int) fi->fh);
+    if (fd < 0) return RET_TO_ERRNO(fd);
+    return RET_TO_ERRNO(close(fd));
+}
+
+/**
+ * Release an open file
+ * The return value of release is ignored.
+ */
+static int lb_release(const char *path, struct fuse_file_info *fi)
+{
+    assert_nonnull(path);
+    assert_nonnull(fi);
+
+    return RET_TO_ERRNO(close((int) fi->fh));
+}
+
+/**
+ * Synchronize file contents
+ *
+ * If the datasync parameter is non-zero, then only the user data
+ * should be flushed, not the meta data.
+ *
+ * Changed in version 2.2
+ */
+static int lb_fsync(
+        const char *path,
+        int datasync,
+        struct fuse_file_info *fi)
+{
+    assert_nonnull(path);
+    assert_nonnull(fi);
+    return RET_TO_ERRNO(fsync((int) fi->fh));
+}
+
+struct loopback_dirp {
+    DIR *dp;
+    struct dirent *entry;
+    off_t offset;
+};
+
+/**
+ * Open directory
+ * File handle will be passed to readdir, closedir and fsyncdir
+ */
+static int lb_opendir(const char *path, struct fuse_file_info *fi)
+{
+    struct loopback_dirp *d;
+
+    assert_nonnull(path);
+    assert_nonnull(fi);
+
+    d = malloc(sizeof(*d));
+    if (d == NULL) return -ENOMEM;
+
+    d->dp = opendir(path);
+    if (d->dp == NULL) {
+        free(d);
+        return -errno;
+    }
+
+    d->entry = NULL;
+    d->offset = 0;
+
+    fi->fh = (uint64_t) d;
+    return 0;
+}
+
+static inline struct loopback_dirp *get_dirp(struct fuse_file_info *fi)
+{
+    assert_nonnull(fi);
+    return (struct loopback_dirp *) fi->fh;
+}
+
+/** Release directory
+ *
+ * Introduced in version 2.3
+ */
+static int lb_releasedir(const char *path, struct fuse_file_info *fi)
+{
+    int e;
+    struct loopback_dirp *d;
+
+    assert_nonnull(path);
+    assert_nonnull(fi);
+
+    d = get_dirp(fi);
+
+    assert_nonnull(d->dp);
+    e = closedir(d->dp);
+    free(d);
+
+    return RET_TO_ERRNO(e);
+}
+
+/**
+ * Initialize filesystem
+ */
+static void *lb_init(struct fuse_conn_info *conn)
+{
+    assert_nonnull(conn);
+
+    FUSE_ENABLE_SETVOLNAME(conn);
+    FUSE_ENABLE_XTIMES(conn);
+
+    if (loopbackfs_cfg.ci) {
+        FUSE_ENABLE_CASE_INSENSITIVE(conn);
+    }
+
+    return NULL;
+}
+
+/**
+ * Clean up filesystem
+ * Called on filesystem exit.
+ */
+static void lb_destroy(void *userdata)
+{
+    UNUSED(userdata);
+}
+
 static struct fuse_operations loopback_op = {
     .getattr = lb_getattr,
     .readlink = lb_readlink,
@@ -308,8 +483,23 @@ static struct fuse_operations loopback_op = {
 
     .open = lb_open,
     .read = lb_read,
+    .write = lb_write,
+    .statfs = lb_statfs,
+    .flush = lb_flush,
+    .release = lb_release,
+    .fsync = lb_fsync,
 
-    /* TODO: more */
+    /* setxattr/getxattr/listxattr/removexattr */
+
+    .opendir = lb_opendir,
+    /* readdir */
+    .releasedir = lb_releasedir,
+
+    /* TODO: fsyncdir */
+
+    .init = lb_init,
+    .destroy = lb_destroy,
+    /* TODO: access */
 };
 
 static struct fuse_opt loopback_opts[] = {
