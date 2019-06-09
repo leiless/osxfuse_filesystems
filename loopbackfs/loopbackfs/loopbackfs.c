@@ -457,6 +457,106 @@ static void lb_destroy(void *userdata)
     UNUSED(userdata);
 }
 
+/**
+ * Create and open a file
+ */
+static int lb_create(
+        const char *path,
+        mode_t mode,
+        struct fuse_file_info *fi)
+{
+    int fd;
+
+    assert_nonnull(path);
+    assert_nonnull(fi);
+
+    fd = open(path, fi->flags, mode);
+    if (fd < 0) return -errno;
+
+    fi->fh = fd;
+    return 0;
+}
+
+/**
+ * Change the size of an open file
+ */
+static int lb_ftruncate(
+        const char *path,
+        off_t off,
+        struct fuse_file_info *fi)
+{
+    assert_nonnull(path);
+    assert_nonnull(fi);
+
+    return RET_TO_ERRNO(ftruncate((int) fi->fh, off));
+}
+
+/**
+ * Get attributes from an open file
+ */
+static int lb_fgetattr(
+        const char *path,
+        struct stat *st,
+        struct fuse_file_info *fi)
+{
+    int e;
+
+    assert_nonnull(path);
+    assert_nonnull(st);
+    assert_nonnull(fi);
+
+    e = fstat((int) fi->fh, st);
+    if (e == 0) {
+#if FUSE_VERSION >= 29
+        /* Fall back to global IO size  see: lb_getattr() */
+        st->st_blksize = 0;
+#endif
+    }
+
+    return RET_TO_ERRNO(e);
+}
+
+/**
+ * Change the access and modification times of a file with nanosecond resolution
+ */
+static int lb_utimens(const char *path, const struct timespec tv[2])
+{
+    assert_nonnull(path);
+    assert_nonnull(tv);
+    /* Flag is zero, will follow symlink */
+    return RET_TO_ERRNO(utimensat(AT_FDCWD, path, tv, 0));
+}
+
+static int lb_statfs_x(const char *path, struct statfs *st)
+{
+    assert_nonnull(path);
+    assert_nonnull(st);
+    return RET_TO_ERRNO(statfs(path, st));
+}
+
+static int lb_setvolname(const char *volname)
+{
+    assert_nonnull(volname);
+    return 0;
+}
+
+static int lb_exchange(
+        const char *path1,
+        const char *path2,
+        unsigned long options)
+{
+    assert_nonnull(path1);
+    assert_nonnull(path2);
+    /* NOTE: warn if options & ~0xffffffffUL */
+    return RET_TO_ERRNO(exchangedata(path1, path2, (unsigned int) options));
+}
+
+static int lb_chflags(const char *path, uint32_t flags)
+{
+    assert_nonnull(path);
+    return RET_TO_ERRNO(chflags(path, flags));
+}
+
 static struct fuse_operations loopback_op = {
     .getattr = lb_getattr,
     .readlink = lb_readlink,
@@ -489,7 +589,7 @@ static struct fuse_operations loopback_op = {
     .release = lb_release,
     .fsync = lb_fsync,
 
-    /* setxattr/getxattr/listxattr/removexattr */
+    /* TODO: setxattr/getxattr/listxattr/removexattr */
 
     .opendir = lb_opendir,
     /* readdir */
@@ -500,6 +600,19 @@ static struct fuse_operations loopback_op = {
     .init = lb_init,
     .destroy = lb_destroy,
     /* TODO: access */
+    .create = lb_create,
+    .ftruncate = lb_ftruncate,
+    .fgetattr = lb_fgetattr,
+    /* TODO: lock */
+    .utimens = lb_utimens,
+    /* TODO: bmap/ioctl/poll/write_buf/read_buf/flock/fallocate */
+
+    .statfs_x = lb_statfs_x,
+    .setvolname = lb_setvolname,
+    .exchange = lb_exchange,
+    /* TODO: getxtimes/setbkuptime/setchgtime/setcrtime */
+    .chflags = lb_chflags,
+    /* TODO: setattr_x/fsetattr_x */
 };
 
 static struct fuse_opt loopback_opts[] = {
