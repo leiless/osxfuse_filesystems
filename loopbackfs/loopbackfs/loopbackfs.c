@@ -24,12 +24,14 @@
 #include <stdio.h>
 #include <stddef.h>     /* offsetof() */
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>     /* readlink(2) */
 #include <dirent.h>     /* DIR */
 #include <errno.h>
 
 #include <sys/stat.h>   /* umask(2) */
 #include <sys/stat.h>   /* lstat(2) */
+#include <sys/xattr.h>
 
 #define FUSE_USE_VERSION            26
 #include <fuse.h>
@@ -371,6 +373,143 @@ static int lb_fsync(
     return RET_TO_ERRNO(fsync((int) fi->fh));
 }
 
+#define XATTR_APPLE_PREFIX          "com.apple."
+#define A_KAUTH_FILESEC_XATTR       "com.apple.system.Security"
+#define P_KAUTH_FILESEC_XATTR       "pseudo." A_KAUTH_FILESEC_XATTR
+
+/**
+ * Set extended attributes
+ */
+static int lb_setxattr(
+        const char *path,
+        const char *name,
+        const char *value,
+        size_t size,
+        int options,
+        uint32_t position)
+{
+    int e;
+
+    assert_nonnull(path);
+    assert_nonnull(name);
+    assert(!!value || !size);
+
+    if (!strncmp(name, XATTR_APPLE_PREFIX, STRLEN(XATTR_APPLE_PREFIX))) {
+        options &= ~(XATTR_NOSECURITY | XATTR_NODEFAULT);
+    }
+
+    if (!strcmp(name, A_KAUTH_FILESEC_XATTR)) {
+        e = setxattr(path, P_KAUTH_FILESEC_XATTR, value, size, position, options);
+    } else {
+        e = setxattr(path, name, value, size, position, options);
+    }
+
+    return RET_TO_ERRNO(e);
+}
+
+/**
+ * Get extended attributes
+ *
+ * XXX: OSX FUSE getxattr callback doesn't provide options parameter
+ *  thusly we use XATTR_NOFOLLOW as default options
+ */
+static int lb_getxattr(
+        const char *path,
+        const char *name,
+        char *value,
+        size_t size,
+        uint32_t position)
+{
+    static int options = XATTR_NOFOLLOW;
+    ssize_t sz;
+
+    assert_nonnull(path);
+    assert_nonnull(name);
+
+    if (!strcmp(name, A_KAUTH_FILESEC_XATTR)) {
+        sz = getxattr(path, A_KAUTH_FILESEC_XATTR, value, size, position, options);
+    } else {
+        sz = getxattr(path, name, value, size, position, options);
+    }
+
+    return RET_TO_ERRNO(sz);
+}
+
+/**
+ * List extended attributes
+ *
+ * XXX: OSX FUSE listxattr callback doesn't provide options parameter
+ *  thusly we use XATTR_NOFOLLOW as default options
+ */
+static int lb_listxattr(const char *path, char *namebuf, size_t size)
+{
+    static int options = XATTR_NOFOLLOW;
+    ssize_t rd;
+
+    assert_nonnull(path);
+
+    rd = listxattr(path, namebuf, size, options);
+    if (rd > 0) {
+        if (namebuf != NULL) {
+            size_t len = 0;
+            char *curr = namebuf;
+            size_t currlen;
+
+            do {
+                currlen = strlen(curr) + 1;
+
+                /* Don't expose fake A_KAUTH_FILESEC_XATTR to user space */
+                if (!strcmp(curr, P_KAUTH_FILESEC_XATTR)) {
+                    (void) memmove(curr, curr + currlen, rd - len - currlen);
+                    rd -= currlen;
+                    break;
+                }
+
+                curr += currlen;
+                len += currlen;
+            } while (len < rd);
+        } else {
+#if 1
+            /*
+             * listxattr(2) don't have to return strict name buffer size
+             *  since it's only a snapshot
+             * if we don't check P_KAUTH_FILESEC_XATTR
+             *  which we may overcommit return name buffer size(if it present)
+             *  it's fine and we reduced a syscall call(getxattr)
+             */
+            ssize_t rd2 = getxattr(path, P_KAUTH_FILESEC_XATTR, NULL, 0, 0, options);
+            if (rd2 >= 0) rd -= STRLEN(P_KAUTH_FILESEC_XATTR) + 1;
+            assert(rd >= 0);
+#endif
+        }
+    }
+
+    return RET_TO_ERRNO(rd);
+}
+
+/**
+ * Remove extended attributes
+ *
+ * XXX: OSX FUSE removexattr callback doesn't provide options parameter
+ *  thusly we use XATTR_NOFOLLOW as default options
+ */
+static int lb_removexattr(const char *path, const char *name)
+{
+    static int options = XATTR_NOFOLLOW;
+    int e;
+
+    assert_nonnull(path);
+    assert_nonnull(name);
+
+    if (!strcmp(name, A_KAUTH_FILESEC_XATTR)) {
+        e = removexattr(path, A_KAUTH_FILESEC_XATTR, options);
+    } else {
+        e = removexattr(path, name, options);
+    }
+
+    return RET_TO_ERRNO(e);
+}
+
 struct loopback_dirp {
     DIR *dp;
     struct dirent *entry;
@@ -589,7 +728,10 @@ static struct fuse_operations loopback_op = {
     .release = lb_release,
     .fsync = lb_fsync,
 
-    /* TODO: setxattr/getxattr/listxattr/removexattr */
+    .setxattr = lb_setxattr,
+    .getxattr = lb_getxattr,
+    .listxattr = lb_listxattr,
+    .removexattr = lb_removexattr,
 
     .opendir = lb_opendir,
     /* readdir */
