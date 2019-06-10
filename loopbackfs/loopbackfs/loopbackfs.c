@@ -378,6 +378,15 @@ static int lb_fsync(
 #define P_KAUTH_FILESEC_XATTR       "pseudo." A_KAUTH_FILESEC_XATTR
 
 /**
+ * Replace A_KAUTH_FILESEC_XATTR with P_KAUTH_FILESEC_XATTR
+ */
+static const char *map_xattr_name(const char *name)
+{
+    assert_nonnull(name);
+    return strcmp(name, A_KAUTH_FILESEC_XATTR) ? name : P_KAUTH_FILESEC_XATTR;
+}
+
+/**
  * Set extended attributes
  */
 static int lb_setxattr(
@@ -398,12 +407,7 @@ static int lb_setxattr(
         options &= ~(XATTR_NOSECURITY | XATTR_NODEFAULT);
     }
 
-    if (!strcmp(name, A_KAUTH_FILESEC_XATTR)) {
-        e = setxattr(path, P_KAUTH_FILESEC_XATTR, value, size, position, options);
-    } else {
-        e = setxattr(path, name, value, size, position, options);
-    }
-
+    e = setxattr(path, map_xattr_name(name), value, size, position, options);
     return RET_TO_ERRNO(e);
 }
 
@@ -426,12 +430,7 @@ static int lb_getxattr(
     assert_nonnull(path);
     assert_nonnull(name);
 
-    if (!strcmp(name, A_KAUTH_FILESEC_XATTR)) {
-        sz = getxattr(path, A_KAUTH_FILESEC_XATTR, value, size, position, options);
-    } else {
-        sz = getxattr(path, name, value, size, position, options);
-    }
-
+    sz = getxattr(path, map_xattr_name(name), value, size, position, options);
     return RET_TO_ERRNO(sz);
 }
 
@@ -501,12 +500,7 @@ static int lb_removexattr(const char *path, const char *name)
     assert_nonnull(path);
     assert_nonnull(name);
 
-    if (!strcmp(name, A_KAUTH_FILESEC_XATTR)) {
-        e = removexattr(path, A_KAUTH_FILESEC_XATTR, options);
-    } else {
-        e = removexattr(path, name, options);
-    }
-
+    e = removexattr(path, map_xattr_name(name), options);
     return RET_TO_ERRNO(e);
 }
 
