@@ -404,6 +404,14 @@ static int lb_setxattr(
     assert(!!value || !size);
 
     if (!strncmp(name, XATTR_APPLE_PREFIX, STRLEN(XATTR_APPLE_PREFIX))) {
+        /*
+         * The XATTR_NOSECURITY, XATTR_NODEFAULT flag implies a kernel request
+         * Specify in user space will result in errno EINVAL
+         *
+         * see:
+         *  xnu/bsd/vfs/vfs_syscalls.c#setxattr()
+         *  xnu/bsd/vfs/vfs_xattr.c#vn_setxattr()
+         */
         options &= ~(XATTR_NOSECURITY | XATTR_NODEFAULT);
     }
 
