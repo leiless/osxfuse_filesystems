@@ -32,6 +32,7 @@
 #include <sys/stat.h>   /* umask(2) */
 #include <sys/stat.h>   /* lstat(2) */
 #include <sys/xattr.h>
+#include <sys/vnode.h>  /* PREALLOCATE */
 
 #define FUSE_USE_VERSION            26
 #include <fuse.h>
@@ -486,6 +487,7 @@ static int lb_listxattr(const char *path, char *namebuf, size_t size)
              */
             ssize_t rd2 = getxattr(path, P_KAUTH_FILESEC_XATTR, NULL, 0, 0, options);
             if (rd2 >= 0) rd -= STRLEN(P_KAUTH_FILESEC_XATTR) + 1;
+            /* FIXME: potential TOCTOU bug */
             assert(rd >= 0);
 #endif
         }
@@ -549,6 +551,51 @@ static inline struct loopback_dirp *get_dirp(struct fuse_file_info *fi)
 {
     assert_nonnull(fi);
     return (struct loopback_dirp *) fi->fh;
+}
+
+static int lb_readdir(
+        const char *path,
+        void *buf,
+        fuse_fill_dir_t filler,
+        off_t off,
+        struct fuse_file_info *fi)
+{
+    struct loopback_dirp *d;
+    struct stat st;
+    off_t nextoff;
+
+    assert_nonnull(path);
+    assert_nonnull(buf);
+    assert_nonnull(filler);
+    assert(off >= 0);
+    assert_nonnull(fi);
+
+    d = get_dirp(fi);
+    assert_nonnull(d);
+
+    if (off != d->offset) {
+        seekdir(d->dp, (long) off);
+        d->entry = NULL;
+        d->offset = off;
+    }
+
+    while (1) {
+        if (d->entry == NULL) {
+            if ((d->entry = readdir(d->dp)) == NULL) break;
+        }
+
+        (void) memset(&st, 0, sizeof(st));
+        st.st_ino = d->entry->d_ino;
+        st.st_mode = d->entry->d_type << 12;
+        nextoff = telldir(d->dp);
+        /* break if dir buffer is full */
+        if (filler(buf, d->entry->d_name, &st, nextoff)) break;
+
+        d->entry = NULL;
+        d->offset = nextoff;
+    }
+
+    return 0;
 }
 
 /** Release directory
@@ -668,6 +715,45 @@ static int lb_utimens(const char *path, const struct timespec tv[2])
     return RET_TO_ERRNO(utimensat(AT_FDCWD, path, tv, 0));
 }
 
+/**
+ * Allocates space for an open file
+ */
+static int lb_fallocate(
+        const char *path,
+        int mode,
+        off_t off,
+        off_t len,
+        struct fuse_file_info *fi)
+{
+    fstore_t fst;
+
+    assert_nonnull(path);
+    assert(off >= 0);
+    assert(len >= 0);
+    assert_nonnull(fi);
+
+    if ((mode & PREALLOCATE) == 0) return -ENOTSUP;
+
+    fst.fst_flags = 0;
+    if (mode & ALLOCATECONTIG) {
+        fst.fst_flags |= F_ALLOCATECONTIG;
+    }
+    if (mode & ALLOCATEALL) {
+        fst.fst_flags |= F_ALLOCATEALL;
+    }
+
+    if (mode & ALLOCATEFROMPEOF) {
+        fst.fst_posmode = F_PEOFPOSMODE;
+    } else if (mode & ALLOCATEFROMVOL) {
+        fst.fst_posmode = F_VOLPOSMODE;
+    }
+
+    fst.fst_offset = off;
+    fst.fst_length = len;
+
+    return RET_TO_ERRNO(fcntl((int) fi->fh, F_PREALLOCATE, &fst));
+}
+
 static int lb_statfs_x(const char *path, struct statfs *st)
 {
     assert_nonnull(path);
@@ -736,10 +822,10 @@ static struct fuse_operations loopback_op = {
     .removexattr = lb_removexattr,
 
     .opendir = lb_opendir,
-    /* readdir */
+    .readdir = lb_readdir,
     .releasedir = lb_releasedir,
 
-    /* TODO: fsyncdir */
+    .fsyncdir = NULL,   /* TODO */
 
     .init = lb_init,
     .destroy = lb_destroy,
@@ -749,7 +835,9 @@ static struct fuse_operations loopback_op = {
     .fgetattr = lb_fgetattr,
     /* TODO: lock */
     .utimens = lb_utimens,
-    /* TODO: bmap/ioctl/poll/write_buf/read_buf/flock/fallocate */
+
+    /* TODO: bmap/ioctl/poll/write_buf/read_buf/flock */
+    .fallocate = lb_fallocate,
 
     .statfs_x = lb_statfs_x,
     .setvolname = lb_setvolname,
