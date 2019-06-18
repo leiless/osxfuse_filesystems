@@ -716,6 +716,18 @@ static int lb_utimens(const char *path, const struct timespec tv[2])
     return RET_TO_ERRNO(utimensat(AT_FDCWD, path, tv, 0));
 }
 
+static int lb_flock(const char *path, struct fuse_file_info *fi, int op)
+{
+    int e;
+
+    assert_nonnull(path);
+    assert_nonnull(fi);
+    UNUSED(path);
+
+    e = flock((int) fi->fh, op);
+    return RET_TO_ERRNO(e);
+}
+
 /**
  * Allocates space for an open file
  */
@@ -1063,7 +1075,7 @@ static struct fuse_operations loopback_op = {
     .poll = NULL,
     .write_buf = NULL,
     .read_buf = NULL,
-    .flock = NULL,
+    .flock = lb_flock,
 
     .fallocate = lb_fallocate,
 
