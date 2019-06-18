@@ -834,11 +834,19 @@ static int lb_getxtimes(
 
     attrs.commonattr = ATTR_CMN_BKUPTIME;
     e = getattrlist(path, &attrs, &buf, sizeof(buf), FSOPT_NOFOLLOW);
-    (void) memcpy(bkuptime, e == 0 ? &buf.xtime : 0, sizeof(*bkuptime));
+    if (e == 0) {
+        (void) memcpy(bkuptime, &buf.xtime, sizeof(*bkuptime));
+    } else {
+        (void) memset(bkuptime, 0, sizeof(*bkuptime));
+    }
 
     attrs.commonattr = ATTR_CMN_CRTIME;
     e = getattrlist(path, &attrs, &buf, sizeof(buf), FSOPT_NOFOLLOW);
-    (void) memcpy(crtime, e == 0 ? &buf.xtime : 0, sizeof(*crtime));
+    if (e == 0) {
+        (void) memcpy(crtime, &buf.xtime, sizeof(*crtime));
+    } else {
+        (void) memset(crtime, 0, sizeof(*crtime));
+    }
 
     return 0;
 }
@@ -1142,6 +1150,6 @@ int main(int argc, char *argv[])
     e = fuse_main(args.argc, args.argv, &loopback_op, NULL);
 
     fuse_opt_free_args(&args);
-    return 0;
+    return e;
 }
 
