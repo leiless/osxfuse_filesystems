@@ -1013,19 +1013,24 @@ static struct fuse_operations loopback_op = {
     .opendir = lb_opendir,
     .readdir = lb_readdir,
     .releasedir = lb_releasedir,
-
-    .fsyncdir = NULL,   /* TODO */
+    .fsyncdir = NULL,
 
     .init = lb_init,
     .destroy = lb_destroy,
-    /* TODO: access */
+    .access = NULL,
     .create = lb_create,
     .ftruncate = lb_ftruncate,
     .fgetattr = lb_fgetattr,
-    /* TODO: lock */
+    .lock = NULL,
     .utimens = lb_utimens,
 
-    /* TODO: bmap/ioctl/poll/write_buf/read_buf/flock */
+    .bmap = NULL,
+    .ioctl = NULL,
+    .poll = NULL,
+    .write_buf = NULL,
+    .read_buf = NULL,
+    .flock = NULL,
+
     .fallocate = lb_fallocate,
 
     .statfs_x = lb_statfs_x,
