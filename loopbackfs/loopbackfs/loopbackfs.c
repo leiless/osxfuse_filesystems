@@ -767,6 +767,43 @@ static int lb_setvolname(const char *volname)
     return 0;
 }
 
+static int lb_getxtimes(
+        const char *path,
+        struct timespec *bkuptime,
+        struct timespec *crtime)
+{
+    /*
+     * see:
+     *  getattrlist(2) ATTRIBUTE BUFFER section
+     *  setattrlist(2)
+     */
+    struct xtimeattrbuf {
+        uint32_t size;
+        struct timespec xtime;
+    } __attribute__ ((packed));
+
+    int e;
+    struct attrlist attrs;
+    struct xtimeattrbuf buf;
+
+    assert_nonnull(path);
+    assert_nonnull(bkuptime);
+    assert_nonnull(crtime);
+
+    (void) memset(&attrs, 0, sizeof(attrs));
+    attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
+
+    attrs.commonattr = ATTR_CMN_BKUPTIME;
+    e = getattrlist(path, &attrs, &buf, sizeof(buf), FSOPT_NOFOLLOW);
+    (void) memcpy(bkuptime, e == 0 ? &buf.xtime : 0, sizeof(*bkuptime));
+
+    attrs.commonattr = ATTR_CMN_CRTIME;
+    e = getattrlist(path, &attrs, &buf, sizeof(buf), FSOPT_NOFOLLOW);
+    (void) memcpy(crtime, e == 0 ? &buf.xtime : 0, sizeof(*crtime));
+
+    return 0;
+}
+
 static int lb_exchange(
         const char *path1,
         const char *path2,
@@ -842,7 +879,13 @@ static struct fuse_operations loopback_op = {
     .statfs_x = lb_statfs_x,
     .setvolname = lb_setvolname,
     .exchange = lb_exchange,
-    /* TODO: getxtimes/setbkuptime/setchgtime/setcrtime */
+
+    .setbkuptime = NULL,
+    .setchgtime = NULL,
+    .setcrtime = NULL,
+
+    .getxtimes = lb_getxtimes,
+
     .chflags = lb_chflags,
     /* TODO: setattr_x/fsetattr_x */
 };
