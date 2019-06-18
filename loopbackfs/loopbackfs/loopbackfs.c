@@ -647,6 +647,15 @@ static void lb_destroy(void *userdata)
 }
 
 /**
+ * Check file access permissions
+ */
+static int lb_access(const char *path, int mode)
+{
+    assert_nonnull(path);
+    return RET_TO_ERRNO(access(path, mode));
+}
+
+/**
  * Create and open a file
  */
 static int lb_create(
@@ -706,6 +715,27 @@ static int lb_fgetattr(
 }
 
 /**
+ * see: http://voyager.deanza.edu/~perry/lock.html
+ * TODO: test me
+ */
+static int lb_lock(
+        const char *path,
+        struct fuse_file_info *fi,
+        int cmd,
+        struct flock *lck)
+{
+    int e;
+
+    assert_nonnull(path);
+    assert_nonnull(fi);
+    assert_nonnull(lck);
+    UNUSED(path);
+
+    e = fcntl((int) fi->fh, cmd, lck);
+    return RET_TO_ERRNO(e);
+}
+
+/**
  * Change the access and modification times of a file with nanosecond resolution
  */
 static int lb_utimens(const char *path, const struct timespec tv[2])
@@ -718,14 +748,10 @@ static int lb_utimens(const char *path, const struct timespec tv[2])
 
 static int lb_flock(const char *path, struct fuse_file_info *fi, int op)
 {
-    int e;
-
     assert_nonnull(path);
     assert_nonnull(fi);
     UNUSED(path);
-
-    e = flock((int) fi->fh, op);
-    return RET_TO_ERRNO(e);
+    return RET_TO_ERRNO(flock((int) fi->fh, op));
 }
 
 /**
@@ -1059,15 +1085,20 @@ static struct fuse_operations loopback_op = {
     .opendir = lb_opendir,
     .readdir = lb_readdir,
     .releasedir = lb_releasedir,
+
+    /* see: https://github.com/jtgeibel/tarsnap-deb/blob/master/lib/util/dirutil.c#L34 */
     .fsyncdir = NULL,
 
     .init = lb_init,
     .destroy = lb_destroy,
-    .access = NULL,
+
+    /* FUSE loopback example not yet implemented access() */
+    .access = lb_access,
+
     .create = lb_create,
     .ftruncate = lb_ftruncate,
     .fgetattr = lb_fgetattr,
-    .lock = NULL,
+    .lock = lb_lock,
     .utimens = lb_utimens,
 
     .bmap = NULL,
