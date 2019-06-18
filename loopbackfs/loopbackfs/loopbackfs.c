@@ -816,6 +816,40 @@ static int lb_exchange(
     return RET_TO_ERRNO(exchangedata(path1, path2, (unsigned int) options));
 }
 
+static int _lb_setxtime(
+        const char *path,
+        const struct timespec *tv,
+        attrgroup_t commonattr)
+{
+    int e;
+    struct attrlist attrl;
+
+    assert_nonnull(path);
+    assert_nonnull(tv);
+
+    (void) memset(&attrl, 0, sizeof(attrl));
+    attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+    attrl.commonattr = commonattr;
+    e = setattrlist(path, &attrl, (void *) tv, sizeof(*tv), FSOPT_NOFOLLOW);
+
+    return RET_TO_ERRNO(e);
+}
+
+static inline int lb_setbkuptime(const char *path, const struct timespec *tv)
+{
+    return _lb_setxtime(path, tv, ATTR_CMN_BKUPTIME);
+}
+
+static inline int lb_setchgtime(const char *path, const struct timespec *tv)
+{
+    return _lb_setxtime(path, tv, ATTR_CMN_CHGTIME);
+}
+
+static inline int lb_setcrtime(const char *path, const struct timespec *tv)
+{
+    return _lb_setxtime(path, tv, ATTR_CMN_CRTIME);
+}
+
 static int lb_chflags(const char *path, uint32_t flags)
 {
     assert_nonnull(path);
@@ -1037,9 +1071,9 @@ static struct fuse_operations loopback_op = {
     .setvolname = lb_setvolname,
     .exchange = lb_exchange,
 
-    .setbkuptime = NULL,
-    .setchgtime = NULL,
-    .setcrtime = NULL,
+    .setbkuptime = lb_setbkuptime,
+    .setchgtime = lb_setchgtime,
+    .setcrtime = lb_setcrtime,
 
     .getxtimes = lb_getxtimes,
 
