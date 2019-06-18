@@ -46,12 +46,13 @@ struct loopbackfs_config {
 static struct loopbackfs_config loopbackfs_cfg; /* Zeroed out */
 
 /*
- * Loopback fs implementations
+ * Loopback fs implementation
  *
  * NOTE: All following functions return 0 on success  -errno on failure
  */
 
 #define RET_TO_ERRNO(e)     ((e) ? -errno : 0)
+#define RET_IF_ERROR(stmt)  if ((stmt) != 0) return -errno
 
 /**
  * Get file attributes.
@@ -821,6 +822,75 @@ static int lb_chflags(const char *path, uint32_t flags)
     return RET_TO_ERRNO(chflags(path, flags));
 }
 
+static int lb_setattr_x(const char *path, struct setattr_x *attr)
+{
+    int e;
+    uid_t uid = -1;
+    gid_t gid = -1;
+    struct timeval tv[2];
+    struct attrlist attrl;
+
+    if (SETATTR_WANTS_MODE(attr)) {
+        RET_IF_ERROR(lchmod(path, attr->mode));
+    }
+
+    if (SETATTR_WANTS_UID(attr)) uid = attr->uid;
+    if (SETATTR_WANTS_GID(attr)) gid = attr->gid;
+
+    if (uid != -1 || gid != -1) {
+        RET_IF_ERROR(lchown(path, uid, gid));
+    }
+
+    if (SETATTR_WANTS_SIZE(attr)) {
+        RET_IF_ERROR(truncate(path, attr->size));
+    }
+
+    /*
+     * We don't support modify acctime directly
+     *  instead we modify it with companion of modtime
+     */
+    if (SETATTR_WANTS_MODTIME(attr)) {
+        if (!SETATTR_WANTS_ACCTIME(attr)) {
+            e = gettimeofday(&tv[0], NULL);
+            assert(e == 0);
+        } else {
+            tv[0].tv_sec = attr->acctime.tv_sec;
+            tv[0].tv_usec = (typeof(tv[0].tv_usec)) (attr->acctime.tv_nsec / 1000);
+        }
+        tv[1].tv_sec = attr->modtime.tv_sec;
+        tv[1].tv_usec = (typeof(tv[1].tv_usec)) (attr->modtime.tv_nsec / 1000);
+
+        RET_IF_ERROR(lutimes(path, tv));
+    }
+
+    if (SETATTR_WANTS_CRTIME(attr)) {
+        (void) memset(&attrl, 0, sizeof(attrl));
+        attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrl.commonattr = ATTR_CMN_CRTIME;
+        RET_IF_ERROR(setattrlist(path, &attrl, &attr->crtime, sizeof(attr->crtime), FSOPT_NOFOLLOW));
+    }
+
+    if (SETATTR_WANTS_CHGTIME(attr)) {
+        (void) memset(&attrl, 0, sizeof(attrl));
+        attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrl.commonattr = ATTR_CMN_CHGTIME;
+        RET_IF_ERROR(setattrlist(path, &attrl, &attr->chgtime, sizeof(attr->chgtime), FSOPT_NOFOLLOW));
+    }
+
+    if (SETATTR_WANTS_BKUPTIME(attr)) {
+        (void) memset(&attrl, 0, sizeof(attrl));
+        attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrl.commonattr = ATTR_CMN_BKUPTIME;
+        RET_IF_ERROR(setattrlist(path, &attrl, &attr->bkuptime, sizeof(attr->bkuptime), FSOPT_NOFOLLOW));
+    }
+
+    if (SETATTR_WANTS_FLAGS(attr)) {
+        RET_IF_ERROR(lchflags(path, attr->flags));
+    }
+
+    return 0;
+}
+
 static struct fuse_operations loopback_op = {
     .getattr = lb_getattr,
     .readlink = lb_readlink,
@@ -887,7 +957,8 @@ static struct fuse_operations loopback_op = {
     .getxtimes = lb_getxtimes,
 
     .chflags = lb_chflags,
-    /* TODO: setattr_x/fsetattr_x */
+    .setattr_x = NULL,
+    .fsetattr_x = NULL,
 };
 
 static struct fuse_opt loopback_opts[] = {
