@@ -830,6 +830,9 @@ static int lb_setattr_x(const char *path, struct setattr_x *attr)
     struct timeval tv[2];
     struct attrlist attrl;
 
+    assert_nonnull(path);
+    assert_nonnull(attr);
+
     if (SETATTR_WANTS_MODE(attr)) {
         RET_IF_ERROR(lchmod(path, attr->mode));
     }
@@ -886,6 +889,85 @@ static int lb_setattr_x(const char *path, struct setattr_x *attr)
 
     if (SETATTR_WANTS_FLAGS(attr)) {
         RET_IF_ERROR(lchflags(path, attr->flags));
+    }
+
+    return 0;
+}
+
+/**
+ * see: lb_setattr_x()
+ */
+static int lb_fsetattr_x(
+        const char *path,
+        struct setattr_x *attr,
+        struct fuse_file_info *fi)
+{
+    int e;
+    int fd;
+    uid_t uid = -1;
+    gid_t gid = -1;
+    struct timeval tv[2];
+    struct attrlist attrl;
+
+    assert_nonnull(path);
+    assert_nonnull(attr);
+    assert_nonnull(fi);
+    UNUSED(path);
+
+    fd = (int) fi->fh;
+
+    if (SETATTR_WANTS_MODE(attr)) {
+        RET_IF_ERROR(fchmod(fd, attr->mode));
+    }
+
+    if (SETATTR_WANTS_UID(attr)) uid = attr->uid;
+    if (SETATTR_WANTS_GID(attr)) gid = attr->gid;
+
+    if (uid != -1 || gid != -1) {
+        RET_IF_ERROR(fchown(fd, uid, gid));
+    }
+
+    if (SETATTR_WANTS_SIZE(attr)) {
+        RET_IF_ERROR(ftruncate(fd, attr->size));
+    }
+
+    if (SETATTR_WANTS_MODTIME(attr)) {
+        if (!SETATTR_WANTS_ACCTIME(attr)) {
+            e = gettimeofday(&tv[0], NULL);
+            assert(e == 0);
+        } else {
+            tv[0].tv_sec = attr->acctime.tv_sec;
+            tv[0].tv_usec = (typeof(tv[0].tv_usec)) (attr->acctime.tv_nsec / 1000);
+        }
+        tv[1].tv_sec = attr->modtime.tv_sec;
+        tv[1].tv_usec = (typeof(tv[1].tv_usec)) (attr->modtime.tv_nsec / 1000);
+
+        RET_IF_ERROR(futimes(fd, tv));
+    }
+
+    if (SETATTR_WANTS_CRTIME(attr)) {
+        (void) memset(&attrl, 0, sizeof(attrl));
+        attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrl.commonattr = ATTR_CMN_CRTIME;
+        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->crtime, sizeof(attr->crtime), FSOPT_NOFOLLOW));
+    }
+
+    if (SETATTR_WANTS_CHGTIME(attr)) {
+        (void) memset(&attrl, 0, sizeof(attrl));
+        attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrl.commonattr = ATTR_CMN_CHGTIME;
+        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->chgtime, sizeof(attr->chgtime), FSOPT_NOFOLLOW));
+    }
+
+    if (SETATTR_WANTS_BKUPTIME(attr)) {
+        (void) memset(&attrl, 0, sizeof(attrl));
+        attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrl.commonattr = ATTR_CMN_BKUPTIME;
+        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->bkuptime, sizeof(attr->bkuptime), FSOPT_NOFOLLOW));
+    }
+
+    if (SETATTR_WANTS_FLAGS(attr)) {
+        RET_IF_ERROR(fchflags(fd, attr->flags));
     }
 
     return 0;
@@ -957,8 +1039,8 @@ static struct fuse_operations loopback_op = {
     .getxtimes = lb_getxtimes,
 
     .chflags = lb_chflags,
-    .setattr_x = NULL,
-    .fsetattr_x = NULL,
+    .setattr_x = lb_setattr_x,
+    .fsetattr_x = lb_fsetattr_x,
 };
 
 static struct fuse_opt loopback_opts[] = {
