@@ -363,7 +363,9 @@ static int lb_release(const char *path, struct fuse_file_info *fi)
  * If the datasync parameter is non-zero, then only the user data
  * should be flushed, not the meta data.
  *
- * Changed in version 2.2
+ * [sic fsync(2)]
+ * For applications that require tighter guarantees about
+ *  the integrity of their data, Mac OS X provides the F_FULLFSYNC fcntl
  */
 static int lb_fsync(
         const char *path,
@@ -372,7 +374,11 @@ static int lb_fsync(
 {
     assert_nonnull(path);
     assert_nonnull(fi);
+#if USE_FULL_FSYNC
+    return RET_TO_ERRNO(fcntl((int) fi->fh, F_FULLFSYNC));
+#else
     return RET_TO_ERRNO(fsync((int) fi->fh));
+#endif
 }
 
 #define XATTR_APPLE_PREFIX          "com.apple."
@@ -599,7 +605,8 @@ static int lb_readdir(
     return 0;
 }
 
-/** Release directory
+/**
+ * Release directory
  *
  * Introduced in version 2.3
  */
@@ -618,6 +625,20 @@ static int lb_releasedir(const char *path, struct fuse_file_info *fi)
     free(d);
 
     return RET_TO_ERRNO(e);
+}
+
+/**
+ * Synchronize directory contents
+ *
+ * If the datasync parameter is non-zero, then only the user data
+ * should be flushed, not the meta data
+ */
+static int lb_fsyncdir(
+        const char *path,
+        int datasync,
+        struct fuse_file_info *fi)
+{
+    return lb_fsync(path, datasync, fi);
 }
 
 /**
@@ -1094,8 +1115,12 @@ static struct fuse_operations loopback_op = {
     .readdir = lb_readdir,
     .releasedir = lb_releasedir,
 
-    /* see: https://github.com/jtgeibel/tarsnap-deb/blob/master/lib/util/dirutil.c#L34 */
-    .fsyncdir = NULL,
+    /*
+     * see:
+     *  https://github.com/jtgeibel/tarsnap-deb/blob/master/lib/util/dirutil.c#L34
+     *  https://www.reddit.com/r/node/comments/4r8k11/how_to_call_fsync_on_a_directory/
+     */
+    .fsyncdir = lb_fsyncdir,
 
     .init = lb_init,
     .destroy = lb_destroy,
