@@ -447,8 +447,12 @@ static int lb_getxattr(
     assert_nonnull(name);
 
     sz = getxattr(path, map_xattr_name(name), value, size, position, options);
-    return RET_TO_ERRNO(sz);
+    RET_IF_ERROR(sz);
+    assert((sz & ~0x7fffffffULL) == 0);
+    return (int) sz;
 }
+
+#define USE_STRICT_LISTXATTR_SIZE       1
 
 /**
  * List extended attributes
@@ -477,6 +481,7 @@ static int lb_listxattr(const char *path, char *namebuf, size_t size)
                 if (!strcmp(curr, P_KAUTH_FILESEC_XATTR)) {
                     (void) memmove(curr, curr + currlen, rd - len - currlen);
                     rd -= currlen;
+                    /* NOTE: continue iteration? */
                     break;
                 }
 
@@ -484,7 +489,7 @@ static int lb_listxattr(const char *path, char *namebuf, size_t size)
                 len += currlen;
             } while (len < rd);
         } else {
-#if 1
+#if USE_STRICT_LISTXATTR_SIZE
             /*
              * listxattr(2) don't have to return strict name buffer size
              *  since it's only a snapshot
@@ -500,7 +505,9 @@ static int lb_listxattr(const char *path, char *namebuf, size_t size)
         }
     }
 
-    return RET_TO_ERRNO(rd);
+    RET_IF_ERROR(rd);
+    assert((rd & ~0x7fffffffULL) == 0);
+    return (int) rd;
 }
 
 /**
@@ -1125,7 +1132,7 @@ static struct fuse_operations loopback_op = {
     .init = lb_init,
     .destroy = lb_destroy,
 
-    /* FUSE loopback example not yet implemented access() */
+    /* XXX: FUSE loopback example not yet implemented access() */
     .access = lb_access,
 
     .create = lb_create,
