@@ -595,6 +595,7 @@ static int lb_readdir(
 
     while (1) {
         if (d->entry == NULL) {
+            /* No more directory entry */
             if ((d->entry = readdir(d->dp)) == NULL) break;
         }
 
@@ -626,6 +627,7 @@ static int lb_releasedir(const char *path, struct fuse_file_info *fi)
     assert_nonnull(fi);
 
     d = get_dirp(fi);
+    assert_nonnull(d);
 
     assert_nonnull(d->dp);
     e = closedir(d->dp);
@@ -732,12 +734,12 @@ static int lb_fgetattr(
     assert_nonnull(fi);
 
     e = fstat((int) fi->fh, st);
-    if (e == 0) {
 #if FUSE_VERSION >= 29
+    if (e == 0) {
         /* Fall back to global IO size  see: lb_getattr() */
         st->st_blksize = 0;
-#endif
     }
+#endif
 
     return RET_TO_ERRNO(e);
 }
@@ -765,13 +767,14 @@ static int lb_lock(
 
 /**
  * Change the access and modification times of a file with nanosecond resolution
+ * NOTE: won't follow symlink
  */
 static int lb_utimens(const char *path, const struct timespec tv[2])
 {
+    static int flag = AT_SYMLINK_NOFOLLOW;
     assert_nonnull(path);
     assert_nonnull(tv);
-    /* Flag is zero, will follow symlink */
-    return RET_TO_ERRNO(utimensat(AT_FDCWD, path, tv, 0));
+    return RET_TO_ERRNO(utimensat(AT_FDCWD, path, tv, flag));
 }
 
 static int lb_flock(const char *path, struct fuse_file_info *fi, int op)
@@ -927,6 +930,7 @@ static inline int lb_setcrtime(const char *path, const struct timespec *tv)
 static int lb_chflags(const char *path, uint32_t flags)
 {
     assert_nonnull(path);
+    UNUSED(path);
     return RET_TO_ERRNO(chflags(path, flags));
 }
 
@@ -978,21 +982,24 @@ static int lb_setattr_x(const char *path, struct setattr_x *attr)
         (void) memset(&attrl, 0, sizeof(attrl));
         attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrl.commonattr = ATTR_CMN_CRTIME;
-        RET_IF_ERROR(setattrlist(path, &attrl, &attr->crtime, sizeof(attr->crtime), FSOPT_NOFOLLOW));
+        RET_IF_ERROR(setattrlist(path, &attrl, &attr->crtime,
+                        sizeof(attr->crtime), FSOPT_NOFOLLOW));
     }
 
     if (SETATTR_WANTS_CHGTIME(attr)) {
         (void) memset(&attrl, 0, sizeof(attrl));
         attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrl.commonattr = ATTR_CMN_CHGTIME;
-        RET_IF_ERROR(setattrlist(path, &attrl, &attr->chgtime, sizeof(attr->chgtime), FSOPT_NOFOLLOW));
+        RET_IF_ERROR(setattrlist(path, &attrl, &attr->chgtime,
+                        sizeof(attr->chgtime), FSOPT_NOFOLLOW));
     }
 
     if (SETATTR_WANTS_BKUPTIME(attr)) {
         (void) memset(&attrl, 0, sizeof(attrl));
         attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrl.commonattr = ATTR_CMN_BKUPTIME;
-        RET_IF_ERROR(setattrlist(path, &attrl, &attr->bkuptime, sizeof(attr->bkuptime), FSOPT_NOFOLLOW));
+        RET_IF_ERROR(setattrlist(path, &attrl, &attr->bkuptime,
+                        sizeof(attr->bkuptime), FSOPT_NOFOLLOW));
     }
 
     if (SETATTR_WANTS_FLAGS(attr)) {
@@ -1057,21 +1064,24 @@ static int lb_fsetattr_x(
         (void) memset(&attrl, 0, sizeof(attrl));
         attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrl.commonattr = ATTR_CMN_CRTIME;
-        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->crtime, sizeof(attr->crtime), FSOPT_NOFOLLOW));
+        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->crtime,
+                        sizeof(attr->crtime), FSOPT_NOFOLLOW));
     }
 
     if (SETATTR_WANTS_CHGTIME(attr)) {
         (void) memset(&attrl, 0, sizeof(attrl));
         attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrl.commonattr = ATTR_CMN_CHGTIME;
-        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->chgtime, sizeof(attr->chgtime), FSOPT_NOFOLLOW));
+        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->chgtime,
+                        sizeof(attr->chgtime), FSOPT_NOFOLLOW));
     }
 
     if (SETATTR_WANTS_BKUPTIME(attr)) {
         (void) memset(&attrl, 0, sizeof(attrl));
         attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrl.commonattr = ATTR_CMN_BKUPTIME;
-        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->bkuptime, sizeof(attr->bkuptime), FSOPT_NOFOLLOW));
+        RET_IF_ERROR(fsetattrlist(fd, &attrl, &attr->bkuptime,
+                        sizeof(attr->bkuptime), FSOPT_NOFOLLOW));
     }
 
     if (SETATTR_WANTS_FLAGS(attr)) {
