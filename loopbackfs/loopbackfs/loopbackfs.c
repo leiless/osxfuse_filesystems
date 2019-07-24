@@ -1188,7 +1188,15 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    umask(0);
+    /*
+     * [sic]
+     * A bit set to "0" in the mask means that
+     *  the corresponding permission will be determined
+     *  by the program and the file system
+     *
+     * see: https://en.wikipedia.org/wiki/Umask
+     */
+    (void) umask(0);
     e = fuse_main(args.argc, args.argv, &loopback_op, NULL);
 
     fuse_opt_free_args(&args);
