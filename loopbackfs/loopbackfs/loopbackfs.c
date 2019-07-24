@@ -51,7 +51,7 @@ static struct loopbackfs_config loopbackfs_cfg; /* Zeroed out */
  * NOTE: All following functions return 0 on success  -errno on failure
  */
 
-#define RET_TO_ERRNO(e)     ((e) ? -errno : 0)
+#define RET_TO_ERRNO(e)     ((e < 0) ? -errno : 0)
 #define RET_IF_ERROR(stmt)  if ((stmt) != 0) return -errno
 
 /**
@@ -103,7 +103,7 @@ static int lb_readlink(const char *path, char *buf, size_t sz)
     assert(sz > 0);
 
     n = readlink(path, buf, sz-1);
-    if (n >= 0) buf[sz] = '\0';
+    if (n >= 0) buf[n] = '\0';
 
     return RET_TO_ERRNO(n);
 }
