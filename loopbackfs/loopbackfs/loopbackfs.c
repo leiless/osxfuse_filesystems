@@ -51,8 +51,8 @@ static struct loopbackfs_config loopbackfs_cfg; /* Zeroed out */
  * NOTE: All following functions return 0 on success  -errno on failure
  */
 
-#define RET_TO_ERRNO(e)     ((e < 0) ? -errno : 0)
-#define RET_IF_ERROR(stmt)  if ((stmt) != 0) return -errno
+#define RET_TO_ERRNO(e)   ((e < 0) ? -errno : 0)
+#define RET_IF_ERROR(stmt)  if ((stmt) < 0) return -errno
 
 /**
  * Get file attributes.
@@ -60,14 +60,14 @@ static struct loopbackfs_config loopbackfs_cfg; /* Zeroed out */
  * Similar to stat().  The 'st_dev' and 'st_blksize' fields are ignored.
  * The 'st_ino' field is ignored except if the 'use_ino' mount option is given.
  */
-static int lb_getattr(const char *st, struct stat *stbuf)
+static int lb_getattr(const char *path, struct stat *stbuf)
 {
     int e;
 
-    assert_nonnull(st);
+    assert_nonnull(path);
     assert_nonnull(stbuf);
 
-    e = lstat(st, stbuf);
+    e = lstat(path, stbuf);
     if (e == 0) {
 #if FUSE_VERSION >= 29
         /*
@@ -139,17 +139,13 @@ static int lb_mknod(const char *path, mode_t mode, dev_t dev)
  * */
 static int lb_mkdir(const char *path, mode_t mode)
 {
-    int e;
-
     assert_nonnull(path);
 
     if (!(mode | S_IFDIR)) {
         SYSLOG_WARN("mkdir()  mode %#x without type spec.", mode);
     }
 
-    e = mkdir(path, mode | S_IFDIR);
-
-    return RET_TO_ERRNO(e);
+    return RET_TO_ERRNO(mkdir(path, mode | S_IFDIR));
 }
 
 /**
@@ -284,7 +280,9 @@ static int lb_read(
     assert_nonnull(fi);
 
     n = pread((int) fi->fh, buf, sz, off);
-    return RET_TO_ERRNO(n);
+    RET_IF_ERROR(n);
+    assert((n & ~0x7fffffffULL) == 0);
+    return (int) n;
 }
 
 /**
@@ -303,14 +301,16 @@ static int lb_write(
         off_t off,
         struct fuse_file_info *fi)
 {
-    ssize_t wr;
+    ssize_t n;
 
     assert_nonnull(path);
     assert(!!buf | !sz);    /* Fail if buf is NULL yet sz not zero */
     assert_nonnull(fi);
 
-    wr = pwrite((int) fi->fh, buf, sz, off);
-    return RET_TO_ERRNO(wr);
+    n = pwrite((int) fi->fh, buf, sz, off);
+    RET_IF_ERROR(n);
+    assert((n & ~0x7fffffffULL) == 0);
+    return (int) n;
 }
 
 /**
@@ -481,7 +481,6 @@ static int lb_listxattr(const char *path, char *namebuf, size_t size)
                 if (!strcmp(curr, P_KAUTH_FILESEC_XATTR)) {
                     (void) memmove(curr, curr + currlen, rd - len - currlen);
                     rd -= currlen;
-                    /* NOTE: continue iteration? */
                     break;
                 }
 
@@ -601,7 +600,7 @@ static int lb_readdir(
 
         (void) memset(&st, 0, sizeof(st));
         st.st_ino = d->entry->d_ino;
-        st.st_mode = d->entry->d_type << 12;
+        st.st_mode = DTTOIF(d->entry->d_type);
         nextoff = telldir(d->dp);
         /* break if dir buffer is full */
         if (filler(buf, d->entry->d_name, &st, nextoff)) break;
@@ -759,7 +758,6 @@ static int lb_lock(
     assert_nonnull(path);
     assert_nonnull(fi);
     assert_nonnull(lck);
-    UNUSED(path);
 
     e = fcntl((int) fi->fh, cmd, lck);
     return RET_TO_ERRNO(e);
@@ -781,7 +779,6 @@ static int lb_flock(const char *path, struct fuse_file_info *fi, int op)
 {
     assert_nonnull(path);
     assert_nonnull(fi);
-    UNUSED(path);
     return RET_TO_ERRNO(flock((int) fi->fh, op));
 }
 
@@ -889,7 +886,9 @@ static int lb_exchange(
 {
     assert_nonnull(path1);
     assert_nonnull(path2);
-    /* NOTE: warn if options & ~0xffffffffUL */
+    if (options & ~0xffffffffUL) {
+        SYSLOG_WARN("exchangedata()  bad options: %#lx", options);
+    }
     return RET_TO_ERRNO(exchangedata(path1, path2, (unsigned int) options));
 }
 
@@ -907,8 +906,8 @@ static int _lb_setxtime(
     (void) memset(&attrl, 0, sizeof(attrl));
     attrl.bitmapcount = ATTR_BIT_MAP_COUNT;
     attrl.commonattr = commonattr;
-    e = setattrlist(path, &attrl, (void *) tv, sizeof(*tv), FSOPT_NOFOLLOW);
 
+    e = setattrlist(path, &attrl, (void *) tv, sizeof(*tv), FSOPT_NOFOLLOW);
     return RET_TO_ERRNO(e);
 }
 
@@ -930,7 +929,6 @@ static inline int lb_setcrtime(const char *path, const struct timespec *tv)
 static int lb_chflags(const char *path, uint32_t flags)
 {
     assert_nonnull(path);
-    UNUSED(path);
     return RET_TO_ERRNO(chflags(path, flags));
 }
 
@@ -1027,7 +1025,6 @@ static int lb_fsetattr_x(
     assert_nonnull(path);
     assert_nonnull(attr);
     assert_nonnull(fi);
-    UNUSED(path);
 
     fd = (int) fi->fh;
 
